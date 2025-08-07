@@ -1,0 +1,408 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Relationship Quiz</title>
+<style>
+  /* Hintergrund und Layout */
+  body, html {
+    margin: 0; padding: 0; overflow: hidden;
+    background: #87CEEB; /* hellblauer Himmel */
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    user-select: none;
+  }
+
+  #gameCanvas {
+    display: block;
+    margin: 0 auto;
+    background: #87CEEB;
+    border: 3px solid #555;
+    box-shadow: 0 0 15px rgba(0,0,0,0.3);
+  }
+
+  /* Anzeigen oben */
+  #scoreBoard {
+    position: fixed;
+    top: 10px;
+    left: 10px;
+    color: #fff;
+    font-weight: bold;
+    font-size: 18px;
+    text-shadow: 1px 1px 2px black;
+    z-index: 10;
+  }
+
+  #coinBoard {
+    position: fixed;
+    top: 10px;
+    right: 10px;
+    color: #fff;
+    font-weight: bold;
+    font-size: 18px;
+    text-shadow: 1px 1px 2px black;
+    z-index: 10;
+  }
+
+  /* Game Over Overlay */
+  #gameOverScreen {
+    position: fixed;
+    top: 0; left: 0; width: 100vw; height: 100vh;
+    background: rgba(0,0,0,0.75);
+    color: white;
+    font-size: 32px;
+    font-weight: bold;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    z-index: 20;
+    visibility: hidden;
+  }
+
+  #gameOverScreen button {
+    margin-top: 20px;
+    padding: 12px 24px;
+    font-size: 20px;
+    background: #ffcc00;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    font-weight: bold;
+    box-shadow: 0 4px 0 #aa8800;
+  }
+
+  #gameOverScreen button:active {
+    box-shadow: none;
+    transform: translateY(4px);
+  }
+</style>
+</head>
+<body>
+
+<div id="scoreBoard">Distance: 0</div>
+<div id="coinBoard">Coins: 0</div>
+
+<canvas id="gameCanvas" width="480" height="320"></canvas>
+
+<div id="gameOverScreen">
+  <div id="gameOverText">Game over Bitch!</div>
+  <div id="finalScore" style="margin-top: 10px; font-size: 24px;"></div>
+  <button id="restartButton">Start new</button>
+</div>
+
+<script>
+(() => {
+  const canvas = document.getElementById('gameCanvas');
+  const ctx = canvas.getContext('2d');
+
+  // Spielgrößen
+  const WIDTH = canvas.width;
+  const HEIGHT = canvas.height;
+
+  // Spielfigur (Pika-like) Eigenschaften
+  const player = {
+    x: 50,
+    y: HEIGHT - 60,
+    width: 40,
+    height: 50,
+    vy: 0,
+    gravity: 0.8,
+    jumpStrength: -14,
+    slide: false,
+    slideHeight: 30,
+    normalHeight: 50,
+    isOnGround: true,
+    color: '#FFCC00',
+    earColor: '#331100',
+    cheekColor: '#FF6666',
+    eyeColor: '#000',
+    blinkTimer: 0
+  };
+
+  // Spielvariablen
+  let distance = 0;
+  let coins = 0;
+  let speed = 4;
+  let gameOver = false;
+  let obstacles = [];
+  let coinsArr = [];
+  let frameCount = 0;
+
+  // Anzeigen
+  const scoreBoard = document.getElementById('scoreBoard');
+  const coinBoard = document.getElementById('coinBoard');
+  const gameOverScreen = document.getElementById('gameOverScreen');
+  const finalScore = document.getElementById('finalScore');
+  const restartButton = document.getElementById('restartButton');
+
+  // Steuerung (Touch-Swipe)
+  let touchStartY = null;
+  let touchEndY = null;
+
+  canvas.addEventListener('touchstart', e => {
+    touchStartY = e.changedTouches[0].clientY;
+  });
+
+  canvas.addEventListener('touchend', e => {
+    touchEndY = e.changedTouches[0].clientY;
+    handleSwipe();
+  });
+
+  function handleSwipe() {
+    if (touchStartY === null || touchEndY === null) return;
+    let diff = touchStartY - touchEndY;
+
+    if (Math.abs(diff) > 30) {
+      if (diff > 0) {
+        // Swipe Up -> springen
+        jump();
+      } else {
+        // Swipe Down -> slide
+        slide(true);
+        setTimeout(() => slide(false), 600);
+      }
+    }
+    touchStartY = null;
+    touchEndY = null;
+  }
+
+  // Tastatur (optional für Desktop)
+  document.addEventListener('keydown', e => {
+    if (gameOver) return;
+    if (e.code === 'ArrowUp' || e.code === 'KeyW' || e.code === 'Space') {
+      jump();
+    }
+    if (e.code === 'ArrowDown' || e.code === 'KeyS') {
+      slide(true);
+    }
+  });
+
+  document.addEventListener('keyup', e => {
+    if (e.code === 'ArrowDown' || e.code === 'KeyS') {
+      slide(false);
+    }
+  });
+
+  function jump() {
+    if (player.isOnGround && !player.slide) {
+      player.vy = player.jumpStrength;
+      player.isOnGround = false;
+    }
+  }
+
+  function slide(enable) {
+    player.slide = enable;
+    player.height = enable ? player.slideHeight : player.normalHeight;
+    if (enable) {
+      player.y = HEIGHT - player.height - 10;
+    } else {
+      player.y = HEIGHT - player.height - 10;
+    }
+  }
+
+  // Hindernisse: zwei Typen – über die man springen muss (Hoch) und unter denen man sliden muss (Runter)
+  // Typen: 0 = hochspringen (hohes Hindernis), 1 = durchrutschen (niedriges Hindernis)
+  class Obstacle {
+    constructor(type) {
+      this.type = type;
+      this.width = type === 0 ? 30 : 50;
+      this.height = type === 0 ? 60 : 30;
+      this.x = WIDTH + 20;
+      this.y = HEIGHT - this.height - 10;
+      this.color = type === 0 ? '#4B0082' : '#8B0000';
+    }
+
+    update() {
+      this.x -= speed;
+    }
+
+    draw() {
+      ctx.fillStyle = this.color;
+      if(this.type === 0) {
+        // Hohes Hindernis: z.B. violetter Kristall (cooler)
+        ctx.beginPath();
+        ctx.moveTo(this.x, this.y + this.height);
+        ctx.lineTo(this.x + this.width / 2, this.y);
+        ctx.lineTo(this.x + this.width, this.y + this.height);
+        ctx.closePath();
+        ctx.fill();
+      } else {
+        // Niedriges Hindernis: z.B. rotes Raumschiff
+        ctx.fillRect(this.x, this.y, this.width, this.height);
+        ctx.fillStyle = '#FF4500';
+        ctx.fillRect(this.x + 5, this.y + 5, this.width - 10, this.height - 10);
+      }
+    }
+
+    isColliding(px, py, pw, ph) {
+      return !(px + pw < this.x || px > this.x + this.width || py + ph < this.y || py > this.y + this.height);
+    }
+  }
+
+  // Münzen
+  class Coin {
+    constructor() {
+      this.radius = 10;
+      this.x = WIDTH + 20;
+      this.y = HEIGHT - 70 - Math.random() * 50;
+      this.color = '#FFD700';
+    }
+
+    update() {
+      this.x -= speed;
+    }
+
+    draw() {
+      // Einfacher Kreis mit Lichtreflex
+      let grad = ctx.createRadialGradient(this.x - 3, this.y - 3, 2, this.x, this.y, this.radius);
+      grad.addColorStop(0, '#FFFFA0');
+      grad.addColorStop(1, '#FFD700');
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+      ctx.fill();
+
+      // kleines "C" als Münzen-Symbol
+      ctx.fillStyle = '#B8860B';
+      ctx.font = 'bold 14px Arial';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('C', this.x, this.y);
+    }
+
+    isColliding(px, py, pw, ph) {
+      let distX = Math.abs(this.x - (px + pw / 2));
+      let distY = Math.abs(this.y - (py + ph / 2));
+      if (distX > pw / 2 + this.radius) return false;
+      if (distY > ph / 2 + this.radius) return false;
+      if (distX <= pw / 2) return true;
+      if (distY <= ph / 2) return true;
+      let dx = distX - pw / 2;
+      let dy = distY - ph / 2;
+      return (dx * dx + dy * dy <= this.radius * this.radius);
+    }
+  }
+
+  // Zeichne Spielfigur (Pika-like)
+  function drawPlayer() {
+    const p = player;
+
+    // Körper
+    ctx.fillStyle = p.color;
+    ctx.strokeStyle = '#331100';
+    ctx.lineWidth = 2;
+
+    // Körper Rechteck
+    ctx.beginPath();
+    ctx.moveTo(p.x, p.y + p.height);
+    ctx.lineTo(p.x, p.y + 15);
+    ctx.bezierCurveTo(p.x, p.y, p.x + p.width / 2, p.y - 10, p.x + p.width, p.y + 15);
+    ctx.lineTo(p.x + p.width, p.y + p.height);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+
+    // Ohren (spitz wie Pikachu)
+    ctx.fillStyle = p.earColor;
+    ctx.beginPath();
+    ctx.moveTo(p.x + 10, p.y + 5);
+    ctx.lineTo(p.x + 15, p.y - 20);
+    ctx.lineTo(p.x + 20, p.y + 5);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.moveTo(p.x + p.width - 20, p.y + 5);
+    ctx.lineTo(p.x + p.width - 15, p.y - 20);
+    ctx.lineTo(p.x + p.width - 10, p.y + 5);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+
+    // Wangen (rot)
+    ctx.fillStyle = p.cheekColor;
+    ctx.beginPath();
+    ctx.arc(p.x + 10, p.y + 30, 7, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.beginPath();
+    ctx.arc(p.x + p.width - 10, p.y + 30, 7, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Augen (mit Blinken)
+    ctx.fillStyle = p.eyeColor;
+    if (p.blinkTimer < 5) {
+      // geschlossen
+      ctx.fillRect(p.x + 13, p.y + 20, 6, 3);
+      ctx.fillRect(p.x + p.width - 19, p.y + 20, 6, 3);
+    } else {
+      // offen
+      ctx.beginPath();
+      ctx.arc(p.x + 16, p.y + 20, 3, 0, Math.PI * 2);
+      ctx.arc(p.x + p.width - 16, p.y + 20, 3, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // Nase
+    ctx.fillStyle = '#331100';
+    ctx.beginPath();
+    ctx.moveTo(p.x + p.width / 2 - 3, p.y + 33);
+    ctx.lineTo(p.x + p.width / 2 + 3, p.y + 33);
+    ctx.lineTo(p.x + p.width / 2, p.y + 38);
+    ctx.closePath();
+    ctx.fill();
+
+    // Mund
+    ctx.strokeStyle = '#331100';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(p.x + p.width / 2 - 5, p.y + 42);
+    ctx.quadraticCurveTo(p.x + p.width / 2, p.y + 48, p.x + p.width / 2 + 5, p.y + 42);
+    ctx.stroke();
+  }
+
+  // Update & Spiel-Loop
+  function update() {
+    if (gameOver) return;
+
+    frameCount++;
+    distance += speed * 0.1;
+    scoreBoard.textContent = `Distance: ${Math.floor(distance)}`;
+    coinBoard.textContent = `Coins: ${coins}`;
+
+    // Geschwindigkeit langsam erhöhen
+    if (frameCount % 300 === 0) {
+      speed += 0.3;
+    }
+
+    // Spieler Physik
+    player.vy += player.gravity;
+    player.y += player.vy;
+
+    if (player.y + player.height >= HEIGHT - 10) {
+      player.y = HEIGHT - player.height - 10;
+      player.vy = 0;
+      player.isOnGround = true;
+    }
+
+    // Hindernisse erzeugen
+    if (frameCount % 120 === 0) {
+      let type = Math.random() < 0.5 ? 0 : 1;
+      obstacles.push(new Obstacle(type));
+    }
+
+    // Münzen erzeugen
+    if (frameCount % 100 === 0) {
+      coinsArr.push(new Coin());
+    }
+
+    // Update Hindernisse & Kollision prüfen
+    for (let i = obstacles.length - 1; i >= 0; i--) {
+      obstacles[i].update();
+
+      if (obstacles[i].isColliding(player.x, player.y, player.width, player.height)) {
+        // Kollision -> Game Over
+        gameOver = true;
+        showGameOver();
